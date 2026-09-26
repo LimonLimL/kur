@@ -1,0 +1,11 @@
+[package]
+name = "Online-store"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies.uuid]
+version = "1.26.1"
+features = ["v4"]
+
+[dependencies.time]
+version = "0.3.55"

@@ -1,0 +1,10 @@
+﻿cargo :     Checking Online-store v0.1.0 (D:\╨Ъ╤Г╤А╤Б╨╛╨▓╨░╤П (╨Ь╤Г╤А╨╖╨╕╨╜ ╨Ф╨
+╝╨╕╤В╤А╨╕╨╣)\Online-store)
+строка:1 знак:49
++ ... Мурзин Дмитрий)\Online-store"; cargo check --color never 2>&1 | Out-F ...
++                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Checking On...)\Online-store) 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
