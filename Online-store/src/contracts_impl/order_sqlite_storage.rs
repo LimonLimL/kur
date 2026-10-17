@@ -1,9 +1,7 @@
-use async_sqlite::{JournalMode, Pool, PoolBuilder};
+use async_sqlite::Client;
 use rusqlite::{params_from_iter, types::Value};
-use std::path::PathBuf;
 use time::format_description::well_known::Rfc3339;
-// ИСПРАВЛЕНИЕ: правильный путь к Borrowed
-use time::format_description::Borrowed;
+use time::format_description::{self, FormatDescriptionV3};
 use uuid::Uuid;
 
 use crate::contracts::order_storage::OrderStorage;
@@ -13,19 +11,25 @@ use crate::models::item::Item;
 use crate::models::online_store::OnlineStore;
 use std::collections::HashMap;
 
+/// Единый формат времени для записи и чтения. Дробные доли секунды при
+/// записи отбрасываются, поэтому чтение всегда успешно.
+const TIME_FORMAT: &str = "[hour]:[minute]:[second]";
+
+/// Возвращает разобранное описание формата времени (парсится один раз).
+fn time_format() -> &'static FormatDescriptionV3<'static> {
+    static FORMAT: std::sync::OnceLock<FormatDescriptionV3<'static>> = std::sync::OnceLock::new();
+    FORMAT.get_or_init(|| {
+        format_description::parse_owned::<3>(TIME_FORMAT)
+            .expect("Некорректное описание формата времени")
+    })
+}
+
 pub struct OrderSqliteStorage {
-    connection: Pool,
+    connection: Client,
 }
 
 impl OrderSqliteStorage {
-    pub async fn new(database_url: &str) -> Self {
-        let path_buf = PathBuf::from(database_url);
-        let builder = PoolBuilder::new()
-            .path(path_buf)
-            .journal_mode(JournalMode::Wal)
-            .num_conns(10);
-
-        let connection = builder.open().await.expect("Database creation error");
+    pub fn new(connection: Client) -> Self {
         Self { connection }
     }
 }
@@ -39,7 +43,7 @@ impl OrderStorage for OrderSqliteStorage {
         params.push(order.store_id.into());
         params.push(order.item_id.into());
         params.push(order.order_date.format(&Rfc3339)?.into());
-        params.push(order.order_time.to_string().into());
+        params.push(order.order_time.format(time_format())?.into());
         params.push(order.quantity.into());
         params.push(order.client_name.into());
         params.push(order.client_phone.into());
@@ -54,13 +58,13 @@ impl OrderStorage for OrderSqliteStorage {
         Ok(())
     }
 
-    async fn get(&self, id: Uuid) -> Result<Order, Box<dyn std::error::Error>> {
+    async fn get(&self, id: Uuid) -> Result<Option<Order>, Box<dyn std::error::Error>> {
         const QUERY: &str = "SELECT id, store_id, item_id, order_date, order_time, quantity, client_name, client_phone, confirmation FROM orders WHERE id = ?1";
 
         let result = self
             .connection
             .conn(move |conn| {
-                conn.query_row(QUERY, [id], |row| {
+                let order = match conn.query_row(QUERY, [id], |row| {
                     // Чтение UUID с ручной конвертацией ошибки
                     let id_bytes: Vec<u8> = row.get(0)?;
                     let id = Uuid::from_slice(&id_bytes).map_err(|e| {
@@ -100,11 +104,10 @@ impl OrderStorage for OrderSqliteStorage {
                             )
                         })?;
 
-                    // ИСПРАВЛЕННЫЙ ПАРСИНГ ВРЕМЕНИ
-                    let time_fmt = Borrowed("[hour]:[minute]:[second]");
+                    // Парсинг времени по тому же формату, что используется при записи
                     let order_time_str: String = row.get(4)?;
                     let order_time =
-                        time::Time::parse(&order_time_str, &time_fmt).map_err(|e| {
+                        time::Time::parse(&order_time_str, time_format()).map_err(|e| {
                             rusqlite::Error::FromSqlConversionFailure(
                                 4,
                                 rusqlite::types::Type::Text,
@@ -146,7 +149,13 @@ impl OrderStorage for OrderSqliteStorage {
                         row.get(7)?,
                         row.get::<_, i32>(8)? != 0,
                     ))
-                })
+                }) {
+                    Ok(order) => order,
+                    Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                    Err(e) => return Err(e),
+                };
+
+                Ok(Some(order))
             })
             .await?;
         Ok(result)
@@ -171,7 +180,7 @@ impl OrderStorage for OrderSqliteStorage {
         params.push(order.store_id.into());
         params.push(order.item_id.into());
         params.push(order.order_date.format(&Rfc3339)?.into());
-        params.push(order.order_time.to_string().into());
+        params.push(order.order_time.format(time_format())?.into());
         params.push(order.quantity.into());
         params.push(order.client_name.clone().into());
         params.push(order.client_phone.clone().into());

@@ -1,37 +1,45 @@
 mod contracts;
 mod contracts_impl;
+mod http;
 mod models;
 
-use crate::contracts::item_storage::ItemStorage;
-use crate::contracts_impl::item_sqlite_storage::ItemSqliteStorage;
-use crate::models::item::Item;
-use smol;
-use std::collections::HashMap;
+use std::sync::Arc;
+
+use ohkami::fang::Context;
+use ohkami::{Ohkami, Route};
+
+use crate::contracts_impl::managed_connection_pool::ManagedConnectionPool;
+use crate::http::RequestContext;
+
+/// Путь к файлу базы данных относительно корня пакета.
+const DATABASE_URL: &str = "database/data.db";
+
+/// Максимальное количество одновременно открытых соединений с базой данных.
+const MAX_CONNECTIONS_COUNT: usize = 10;
+
+/// Адрес, на котором запускается HTTP сервер.
+const SERVER_ADDRESS: &str = "localhost:3000";
 
 fn main() {
     smol::block_on(async {
-        println!("Запуск приложения...");
+        // Один раз создаём управляемый пул соединений и регистрируем его
+        // в контексте — обработчики будут получать пул для каждого запроса.
+        let connection_pool =
+            ManagedConnectionPool::initialize(DATABASE_URL.to_string(), MAX_CONNECTIONS_COUNT)
+                .await;
+        let request_context = RequestContext::new(Arc::new(connection_pool));
 
-        // Путь должен совпадать с .env и реальной папкой
-        let db_url = "sqlite://databases/data.db";
-        let item_repo = ItemSqliteStorage::new(db_url).await;
+        println!("HTTP сервер запущен: http://{SERVER_ADDRESS}");
 
-        let new_item = Item::create_new(
-            "Электрочайник Bosch".to_string(),
-            "Bosch".to_string(),
-            "TWK7601".to_string(),
-            HashMap::from([
-                ("color".to_string(), "black".to_string()),
-                ("power".to_string(), "2400W".to_string()),
-            ]),
-            4500.0,
-            24,
-            "images/bosch_kettle.jpg".to_string(),
-        );
-
-        match item_repo.add(new_item).await {
-            Ok(_) => println!("Товар успешно добавлен!"),
-            Err(e) => eprintln!("Ошибка: {}", e),
-        }
-    });
+        Ohkami::new((
+            Context::new(request_context),
+            "/add-item".POST(http::add_item),
+            "/items/:id"
+                .GET(http::get_item)
+                .PUT(http::update_item)
+                .DELETE(http::remove_item),
+        ))
+        .howl(SERVER_ADDRESS)
+        .await;
+    })
 }

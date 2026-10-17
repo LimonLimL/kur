@@ -1,7 +1,6 @@
-use async_sqlite::{JournalMode, Pool, PoolBuilder};
+use async_sqlite::Client;
 use rusqlite::{params_from_iter, types::Value};
 use serde_json;
-use std::path::PathBuf;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
@@ -9,18 +8,11 @@ use crate::contracts::item_storage::ItemStorage;
 use crate::models::item::Item;
 
 pub struct ItemSqliteStorage {
-    connection: Pool,
+    connection: Client,
 }
 
 impl ItemSqliteStorage {
-    pub async fn new(database_url: &str) -> Self {
-        let path_buf = PathBuf::from(database_url);
-        let builder = PoolBuilder::new()
-            .path(path_buf)
-            .journal_mode(JournalMode::Wal)
-            .num_conns(10);
-
-        let connection = builder.open().await.expect("Database creation error");
+    pub fn new(connection: Client) -> Self {
         Self { connection }
     }
 }
@@ -56,13 +48,13 @@ impl ItemStorage for ItemSqliteStorage {
         Ok(())
     }
 
-    async fn get(&self, id: Uuid) -> Result<Item, Box<dyn std::error::Error>> {
+    async fn get(&self, id: Uuid) -> Result<Option<Item>, Box<dyn std::error::Error>> {
         const QUERY: &str = "SELECT id, name, company, model, characteristics, price, guarantee_period, image, created_at, updated_at, deleted_at FROM items WHERE id = ?1";
 
         let result = self
             .connection
             .conn(move |conn| {
-                conn.query_row(QUERY, [id], |row| {
+                let item = match conn.query_row(QUERY, [id], |row| {
                     // Чтение UUID с ручной конвертацией ошибки
                     let id_bytes: Vec<u8> = row.get(0)?;
                     let id = Uuid::from_slice(&id_bytes).map_err(|e| {
@@ -134,7 +126,13 @@ impl ItemStorage for ItemSqliteStorage {
                         updated_at,
                         deleted_at,
                     ))
-                })
+                }) {
+                    Ok(item) => item,
+                    Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                    Err(e) => return Err(e),
+                };
+
+                Ok(Some(item))
             })
             .await?;
         Ok(result)

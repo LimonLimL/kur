@@ -1,9 +1,7 @@
-use async_sqlite::{JournalMode, Pool, PoolBuilder};
+use async_sqlite::Client;
 use rusqlite::{params_from_iter, types::Value};
-use std::path::PathBuf;
 use time::format_description::well_known::Rfc3339;
-// ИСПРАВЛЕНИЕ: правильный путь к Borrowed
-use time::format_description::Borrowed;
+use time::format_description::{self, FormatDescriptionV3};
 use uuid::Uuid;
 
 use crate::contracts::delivery_storage::DeliveryStorage;
@@ -14,19 +12,25 @@ use crate::models::online_store::OnlineStore;
 use crate::models::order::Order;
 use std::collections::HashMap;
 
+/// Единый формат времени для записи и чтения. Дробные доли секунды при
+/// записи отбрасываются, поэтому чтение всегда успешно.
+const TIME_FORMAT: &str = "[hour]:[minute]:[second]";
+
+/// Возвращает разобранное описание формата времени (парсится один раз).
+fn time_format() -> &'static FormatDescriptionV3<'static> {
+    static FORMAT: std::sync::OnceLock<FormatDescriptionV3<'static>> = std::sync::OnceLock::new();
+    FORMAT.get_or_init(|| {
+        format_description::parse_owned::<3>(TIME_FORMAT)
+            .expect("Некорректное описание формата времени")
+    })
+}
+
 pub struct DeliverySqliteStorage {
-    connection: Pool,
+    connection: Client,
 }
 
 impl DeliverySqliteStorage {
-    pub async fn new(database_url: &str) -> Self {
-        let path_buf = PathBuf::from(database_url);
-        let builder = PoolBuilder::new()
-            .path(path_buf)
-            .journal_mode(JournalMode::Wal)
-            .num_conns(10);
-
-        let connection = builder.open().await.expect("Database creation error");
+    pub fn new(connection: Client) -> Self {
         Self { connection }
     }
 }
@@ -39,7 +43,7 @@ impl DeliveryStorage for DeliverySqliteStorage {
         params.push(Uuid::new_v4().into());
         params.push(delivery.order_id.into());
         params.push(delivery.delivery_date.format(&Rfc3339)?.into());
-        params.push(delivery.delivery_time.to_string().into());
+        params.push(delivery.delivery_time.format(time_format())?.into());
         params.push(delivery.delivery_address.into());
         params.push(delivery.client_name.into());
         params.push(delivery.courier_name.into());
@@ -53,13 +57,13 @@ impl DeliveryStorage for DeliverySqliteStorage {
         Ok(())
     }
 
-    async fn get(&self, order_id: Uuid) -> Result<Delivery, Box<dyn std::error::Error>> {
+    async fn get(&self, order_id: Uuid) -> Result<Option<Delivery>, Box<dyn std::error::Error>> {
         const QUERY: &str = "SELECT id, order_id, delivery_date, delivery_time, address, client_name, courier_name FROM deliveries WHERE order_id = ?1";
 
         let result = self
             .connection
             .conn(move |conn| {
-                conn.query_row(QUERY, [order_id], |row| {
+                let delivery = match conn.query_row(QUERY, [order_id], |row| {
                     // Чтение UUID с ручной конвертацией ошибки
                     let _id_bytes: Vec<u8> = row.get(0)?;
                     let order_id_bytes: Vec<u8> = row.get(1)?;
@@ -82,11 +86,10 @@ impl DeliveryStorage for DeliverySqliteStorage {
                             )
                         })?;
 
-                    // ИСПРАВЛЕННЫЙ ПАРСИНГ ВРЕМЕНИ
-                    let time_fmt = Borrowed("[hour]:[minute]:[second]");
+                    // Парсинг времени по тому же формату, что используется при записи
                     let delivery_time_str: String = row.get(3)?;
-                    let delivery_time =
-                        time::Time::parse(&delivery_time_str, &time_fmt).map_err(|e| {
+                    let delivery_time = time::Time::parse(&delivery_time_str, time_format())
+                        .map_err(|e| {
                             rusqlite::Error::FromSqlConversionFailure(
                                 3,
                                 rusqlite::types::Type::Text,
@@ -136,7 +139,13 @@ impl DeliveryStorage for DeliverySqliteStorage {
                         row.get(5)?,
                         row.get(6)?,
                     ))
-                })
+                }) {
+                    Ok(delivery) => delivery,
+                    Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                    Err(e) => return Err(e),
+                };
+
+                Ok(Some(delivery))
             })
             .await?;
         Ok(result)
@@ -159,7 +168,7 @@ impl DeliveryStorage for DeliverySqliteStorage {
         let mut params: Vec<Value> = Vec::with_capacity(6);
         params.push(delivery.order_id.into());
         params.push(delivery.delivery_date.format(&Rfc3339)?.into());
-        params.push(delivery.delivery_time.to_string().into());
+        params.push(delivery.delivery_time.format(time_format())?.into());
         params.push(delivery.delivery_address.clone().into());
         params.push(delivery.client_name.clone().into());
         params.push(delivery.courier_name.clone().into());

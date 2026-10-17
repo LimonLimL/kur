@@ -10,7 +10,7 @@ pub trait ItemStorage {
     fn get(
         &self,
         id: Uuid,
-    ) -> impl Future<Output = Result<Item, Box<dyn std::error::Error>>> + Send;
+    ) -> impl Future<Output = Result<Option<Item>, Box<dyn std::error::Error>>> + Send;
     fn remove(
         &self,
         id: Uuid,

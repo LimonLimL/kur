@@ -1,6 +1,5 @@
-use async_sqlite::{JournalMode, Pool, PoolBuilder};
+use async_sqlite::Client;
 use rusqlite::{params_from_iter, types::Value};
-use std::path::PathBuf;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
@@ -8,18 +7,11 @@ use crate::contracts::online_store_storage::OnlineStoreStorage;
 use crate::models::online_store::OnlineStore;
 
 pub struct OnlineStoreSqliteStorage {
-    connection: Pool,
+    connection: Client,
 }
 
 impl OnlineStoreSqliteStorage {
-    pub async fn new(database_url: &str) -> Self {
-        let path_buf = PathBuf::from(database_url);
-        let builder = PoolBuilder::new()
-            .path(path_buf)
-            .journal_mode(JournalMode::Wal)
-            .num_conns(10);
-
-        let connection = builder.open().await.expect("Database creation error");
+    pub fn new(connection: Client) -> Self {
         Self { connection }
     }
 }
@@ -45,13 +37,13 @@ impl OnlineStoreStorage for OnlineStoreSqliteStorage {
         Ok(())
     }
 
-    async fn get(&self, id: Uuid) -> Result<OnlineStore, Box<dyn std::error::Error>> {
+    async fn get(&self, id: Uuid) -> Result<Option<OnlineStore>, Box<dyn std::error::Error>> {
         const QUERY: &str = "SELECT id, email, delivery_payment, created_at, updated_at, deleted_at FROM online_stores WHERE id = ?1";
 
         let result = self
             .connection
             .conn(move |conn| {
-                conn.query_row(QUERY, [id], |row| {
+                let store = match conn.query_row(QUERY, [id], |row| {
                     let id_bytes: Vec<u8> = row.get(0)?;
                     let id = Uuid::from_slice(&id_bytes).map_err(|e| {
                         rusqlite::Error::FromSqlConversionFailure(
@@ -105,7 +97,13 @@ impl OnlineStoreStorage for OnlineStoreSqliteStorage {
                         updated_at,
                         deleted_at,
                     ))
-                })
+                }) {
+                    Ok(store) => store,
+                    Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                    Err(e) => return Err(e),
+                };
+
+                Ok(Some(store))
             })
             .await?;
         Ok(result)

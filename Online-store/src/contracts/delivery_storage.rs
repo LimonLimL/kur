@@ -10,7 +10,7 @@ pub trait DeliveryStorage {
     fn get(
         &self,
         order_id: Uuid,
-    ) -> impl Future<Output = Result<Delivery, Box<dyn std::error::Error>>> + Send;
+    ) -> impl Future<Output = Result<Option<Delivery>, Box<dyn std::error::Error>>> + Send;
     fn remove(
         &self,
         order_id: Uuid,

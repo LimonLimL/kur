@@ -10,7 +10,7 @@ pub trait OrderStorage {
     fn get(
         &self,
         id: Uuid,
-    ) -> impl Future<Output = Result<Order, Box<dyn std::error::Error>>> + Send;
+    ) -> impl Future<Output = Result<Option<Order>, Box<dyn std::error::Error>>> + Send;
     fn remove(
         &self,
         id: Uuid,

@@ -10,7 +10,7 @@ pub trait OnlineStoreStorage {
     fn get(
         &self,
         id: Uuid,
-    ) -> impl Future<Output = Result<OnlineStore, Box<dyn std::error::Error>>> + Send;
+    ) -> impl Future<Output = Result<Option<OnlineStore>, Box<dyn std::error::Error>>> + Send;
     fn remove(
         &self,
         id: Uuid,
