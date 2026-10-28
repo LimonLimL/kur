@@ -6,13 +6,12 @@ use ohkami::Response;
 use ohkami::claw::{Json, Path};
 use ohkami::fang::Context;
 use ohkami::serde::{Deserialize, Serialize};
-use time::UtcDateTime;
 use uuid::Uuid;
 
 use crate::contracts::item_storage::ItemStorage;
 use crate::contracts_impl::item_sqlite_storage::ItemSqliteStorage;
 use crate::contracts_impl::managed_connection_pool::ManagedConnectionPool;
-use crate::models::item::Item;
+use crate::models::item::{Item, ItemDetails};
 
 /// Общий контекст запроса: пул соединений с базой данных.
 ///
@@ -71,13 +70,13 @@ pub struct ItemResponse {
 impl ItemResponse {
     fn from_item(item: &Item) -> Self {
         Self {
-            id: item.id.to_string(),
-            name: item.name.clone(),
-            company: item.company.clone(),
-            model: item.model.clone(),
+            id: item.id.value().to_string(),
+            name: item.name.value().to_string(),
+            company: item.company.value().to_string(),
+            model: item.model.value().to_string(),
             characteristics: item.characteristics.clone(),
-            price: item.price,
-            guarantee_period: item.guarantee_period,
+            price: item.price.value(),
+            guarantee_period: item.guarantee_period.value() as i32,
             image: item.image.clone(),
         }
     }
@@ -87,6 +86,13 @@ impl ItemResponse {
 #[derive(Serialize)]
 struct ErrorResponse {
     message: String,
+}
+
+/// Ответ `400 Bad Request` с описанием ошибки валидации.
+fn validation_error(message: impl std::fmt::Display) -> Response {
+    Response::BadRequest().with_json(ErrorResponse {
+        message: message.to_string(),
+    })
 }
 
 /// Ответ `500 Internal Server Error` с записью подробностей в лог сервера.
@@ -129,7 +135,7 @@ pub async fn add_item(
     Json(payload): Json<AddItemPayload>,
     Context(context): Context<'_, RequestContext>,
 ) -> Response {
-    let item = Item::create_new(
+    let item = match Item::create_new(
         payload.name,
         payload.company,
         payload.model,
@@ -137,12 +143,15 @@ pub async fn add_item(
         payload.price,
         payload.guarantee_period,
         payload.image,
-    );
+    ) {
+        Ok(item) => item,
+        Err(error) => return validation_error(error),
+    };
     // Ответ готовится до вызова `add`, потому что `add` забирает `item` во владение.
     let response_body = ItemResponse::from_item(&item);
 
     match with_item_storage(
-        &context,
+        context,
         move |storage| async move { storage.add(item).await },
     )
     .await
@@ -162,7 +171,7 @@ pub async fn get_item(
     };
 
     match with_item_storage(
-        &context,
+        context,
         move |storage| async move { storage.get(id).await },
     )
     .await
@@ -183,22 +192,30 @@ pub async fn update_item(
         return Response::BadRequest().with_text("invalid item id");
     };
 
+    // Проверяем новые данные до обращения к базе: ошибка валидации —
+    // это `400 Bad Request`, а не сбой хранилища.
+    let details = match ItemDetails::new(
+        payload.name,
+        payload.company,
+        payload.model,
+        payload.characteristics,
+        payload.price,
+        payload.guarantee_period,
+        payload.image,
+    ) {
+        Ok(details) => details,
+        Err(error) => return validation_error(error),
+    };
+
     // Чтение и запись выполняются на одном выделенном соединении:
     // это и есть смысл управляемого пула соединений.
-    let result = with_item_storage(&context, move |storage| async move {
+    let result = with_item_storage(context, move |storage| async move {
         let mut item = match storage.get(id).await? {
             Some(item) => item,
             None => return Ok(None),
         };
 
-        item.name = payload.name;
-        item.company = payload.company;
-        item.model = payload.model;
-        item.characteristics = payload.characteristics;
-        item.price = payload.price;
-        item.guarantee_period = payload.guarantee_period;
-        item.image = payload.image;
-        item.updated_at = Some(UtcDateTime::now());
+        item.update_details(details);
 
         storage.update(&item).await?;
 
@@ -223,7 +240,7 @@ pub async fn remove_item(
     };
 
     match with_item_storage(
-        &context,
+        context,
         move |storage| async move { storage.remove(id).await },
     )
     .await

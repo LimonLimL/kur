@@ -6,10 +6,8 @@ use uuid::Uuid;
 
 use crate::contracts::order_storage::OrderStorage;
 use crate::models::order::Order;
-// Заглушки для связанных объектов
-use crate::models::item::Item;
-use crate::models::online_store::OnlineStore;
-use std::collections::HashMap;
+
+use super::sqlite_validation_error;
 
 /// Единый формат времени для записи и чтения. Дробные доли секунды при
 /// записи отбрасываются, поэтому чтение всегда успешно.
@@ -39,14 +37,14 @@ impl OrderStorage for OrderSqliteStorage {
         const QUERY: &str = "INSERT INTO orders (id, store_id, item_id, order_date, order_time, quantity, client_name, client_phone, confirmation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
 
         let mut params: Vec<Value> = Vec::with_capacity(9);
-        params.push(order.id.into());
-        params.push(order.store_id.into());
-        params.push(order.item_id.into());
+        params.push(order.id.value().into());
+        params.push(order.store_id.value().into());
+        params.push(order.item_id.value().into());
         params.push(order.order_date.format(&Rfc3339)?.into());
         params.push(order.order_time.format(time_format())?.into());
-        params.push(order.quantity.into());
-        params.push(order.client_name.into());
-        params.push(order.client_phone.into());
+        params.push(i64::from(order.quantity.value()).into());
+        params.push(order.client_name.value().to_string().into());
+        params.push(order.client_phone.value().to_string().into());
         params.push((order.confirmation as i32).into());
 
         self.connection
@@ -115,40 +113,22 @@ impl OrderStorage for OrderSqliteStorage {
                             )
                         })?;
 
-                    // Создание заглушек для связанных объектов
-                    let dummy_store = OnlineStore::create(
-                        store_id,
-                        "".to_string(),
-                        false,
-                        time::UtcDateTime::now(),
-                        None,
-                        None,
-                    );
-                    let dummy_item = Item::create(
-                        item_id,
-                        "".to_string(),
-                        "".to_string(),
-                        "".to_string(),
-                        HashMap::new(),
-                        0.0,
-                        0,
-                        "".to_string(),
-                        time::UtcDateTime::now(),
-                        None,
-                        None,
-                    );
+                    let quantity: i32 = row.get(5)?;
+                    let client_name: String = row.get(6)?;
+                    let client_phone: String = row.get(7)?;
 
-                    Ok(Order::create(
+                    Order::create(
                         id,
-                        &dummy_store,
-                        &dummy_item,
+                        store_id,
+                        item_id,
                         order_date,
                         order_time,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get(7)?,
+                        quantity,
+                        client_name,
+                        client_phone,
                         row.get::<_, i32>(8)? != 0,
-                    ))
+                    )
+                    .map_err(sqlite_validation_error)
                 }) {
                     Ok(order) => order,
                     Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
@@ -176,14 +156,14 @@ impl OrderStorage for OrderSqliteStorage {
         const QUERY: &str = "UPDATE orders SET store_id=?2, item_id=?3, order_date=?4, order_time=?5, quantity=?6, client_name=?7, client_phone=?8, confirmation=?9 WHERE id=?1";
 
         let mut params: Vec<Value> = Vec::with_capacity(9);
-        params.push(order.id.into());
-        params.push(order.store_id.into());
-        params.push(order.item_id.into());
+        params.push(order.id.value().into());
+        params.push(order.store_id.value().into());
+        params.push(order.item_id.value().into());
         params.push(order.order_date.format(&Rfc3339)?.into());
         params.push(order.order_time.format(time_format())?.into());
-        params.push(order.quantity.into());
-        params.push(order.client_name.clone().into());
-        params.push(order.client_phone.clone().into());
+        params.push(i64::from(order.quantity.value()).into());
+        params.push(order.client_name.value().to_string().into());
+        params.push(order.client_phone.value().to_string().into());
         params.push((order.confirmation as i32).into());
 
         self.connection

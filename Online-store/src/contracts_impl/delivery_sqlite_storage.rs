@@ -6,11 +6,8 @@ use uuid::Uuid;
 
 use crate::contracts::delivery_storage::DeliveryStorage;
 use crate::models::delivery::Delivery;
-// Заглушки для связанных объектов
-use crate::models::item::Item;
-use crate::models::online_store::OnlineStore;
-use crate::models::order::Order;
-use std::collections::HashMap;
+
+use super::sqlite_validation_error;
 
 /// Единый формат времени для записи и чтения. Дробные доли секунды при
 /// записи отбрасываются, поэтому чтение всегда успешно.
@@ -41,12 +38,12 @@ impl DeliveryStorage for DeliverySqliteStorage {
 
         let mut params: Vec<Value> = Vec::with_capacity(7);
         params.push(Uuid::new_v4().into());
-        params.push(delivery.order_id.into());
+        params.push(delivery.order_id.value().into());
         params.push(delivery.delivery_date.format(&Rfc3339)?.into());
         params.push(delivery.delivery_time.format(time_format())?.into());
-        params.push(delivery.delivery_address.into());
-        params.push(delivery.client_name.into());
-        params.push(delivery.courier_name.into());
+        params.push(delivery.delivery_address.value().to_string().into());
+        params.push(delivery.client_name.value().to_string().into());
+        params.push(delivery.courier_name.value().to_string().into());
 
         self.connection
             .conn(move |conn| {
@@ -97,48 +94,19 @@ impl DeliveryStorage for DeliverySqliteStorage {
                             )
                         })?;
 
-                    // Создание заглушек для связанных объектов
-                    let dummy_store = OnlineStore::create(
-                        Uuid::nil(),
-                        "".to_string(),
-                        false,
-                        time::UtcDateTime::now(),
-                        None,
-                        None,
-                    );
-                    let dummy_item = Item::create(
-                        Uuid::nil(),
-                        "".to_string(),
-                        "".to_string(),
-                        "".to_string(),
-                        HashMap::new(),
-                        0.0,
-                        0,
-                        "".to_string(),
-                        time::UtcDateTime::now(),
-                        None,
-                        None,
-                    );
-                    let dummy_order = Order::create(
-                        order_id,
-                        &dummy_store,
-                        &dummy_item,
-                        time::UtcDateTime::now(),
-                        time::Time::MIDNIGHT,
-                        0,
-                        "".to_string(),
-                        "".to_string(),
-                        false,
-                    );
+                    let address: String = row.get(4)?;
+                    let client_name: String = row.get(5)?;
+                    let courier_name: String = row.get(6)?;
 
-                    Ok(Delivery::create(
-                        &dummy_order,
+                    Delivery::create(
+                        order_id,
                         delivery_date,
                         delivery_time,
-                        row.get(4)?,
-                        row.get(5)?,
-                        row.get(6)?,
-                    ))
+                        address,
+                        client_name,
+                        courier_name,
+                    )
+                    .map_err(sqlite_validation_error)
                 }) {
                     Ok(delivery) => delivery,
                     Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
@@ -166,12 +134,12 @@ impl DeliveryStorage for DeliverySqliteStorage {
         const QUERY: &str = "UPDATE deliveries SET delivery_date=?2, delivery_time=?3, address=?4, client_name=?5, courier_name=?6 WHERE order_id=?1";
 
         let mut params: Vec<Value> = Vec::with_capacity(6);
-        params.push(delivery.order_id.into());
+        params.push(delivery.order_id.value().into());
         params.push(delivery.delivery_date.format(&Rfc3339)?.into());
         params.push(delivery.delivery_time.format(time_format())?.into());
-        params.push(delivery.delivery_address.clone().into());
-        params.push(delivery.client_name.clone().into());
-        params.push(delivery.courier_name.clone().into());
+        params.push(delivery.delivery_address.value().to_string().into());
+        params.push(delivery.client_name.value().to_string().into());
+        params.push(delivery.courier_name.value().to_string().into());
 
         self.connection
             .conn(move |conn| {

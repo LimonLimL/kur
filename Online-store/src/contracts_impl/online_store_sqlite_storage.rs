@@ -6,6 +6,8 @@ use uuid::Uuid;
 use crate::contracts::online_store_storage::OnlineStoreStorage;
 use crate::models::online_store::OnlineStore;
 
+use super::sqlite_validation_error;
+
 pub struct OnlineStoreSqliteStorage {
     connection: Client,
 }
@@ -21,12 +23,26 @@ impl OnlineStoreStorage for OnlineStoreSqliteStorage {
         const QUERY: &str = "INSERT INTO online_stores (id, email, delivery_payment, created_at, updated_at, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
 
         let mut params: Vec<Value> = Vec::with_capacity(6);
-        params.push(store.id.into());
-        params.push(store.email.into());
+        params.push(store.id.value().into());
+        params.push(store.email.value().to_string().into());
         params.push((store.delivery_payment as i32).into());
-        params.push(store.created_at.format(&Rfc3339)?.into());
-        params.push(store.updated_at.map(|t| t.format(&Rfc3339).unwrap()).into());
-        params.push(store.deleted_at.map(|t| t.format(&Rfc3339).unwrap()).into());
+        params.push(store.record_lifetime.created_at().format(&Rfc3339)?.into());
+        params.push(
+            store
+                .record_lifetime
+                .updated_at()
+                .map(|t| t.format(&Rfc3339))
+                .transpose()?
+                .into(),
+        );
+        params.push(
+            store
+                .record_lifetime
+                .deleted_at()
+                .map(|t| t.format(&Rfc3339))
+                .transpose()?
+                .into(),
+        );
 
         self.connection
             .conn(move |conn| {
@@ -89,14 +105,17 @@ impl OnlineStoreStorage for OnlineStoreSqliteStorage {
                         })
                         .transpose()?;
 
-                    Ok(OnlineStore::create(
+                    let email: String = row.get(1)?;
+
+                    OnlineStore::create(
                         id,
-                        row.get(1)?,
+                        email,
                         row.get::<_, i32>(2)? != 0,
                         created_at,
                         updated_at,
                         deleted_at,
-                    ))
+                    )
+                    .map_err(sqlite_validation_error)
                 }) {
                     Ok(store) => store,
                     Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
@@ -124,11 +143,25 @@ impl OnlineStoreStorage for OnlineStoreSqliteStorage {
         const QUERY: &str = "UPDATE online_stores SET email=?2, delivery_payment=?3, updated_at=?4, deleted_at=?5 WHERE id=?1";
 
         let mut params: Vec<Value> = Vec::with_capacity(5);
-        params.push(store.id.into());
-        params.push(store.email.clone().into());
+        params.push(store.id.value().into());
+        params.push(store.email.value().to_string().into());
         params.push((store.delivery_payment as i32).into());
-        params.push(store.updated_at.map(|t| t.format(&Rfc3339).unwrap()).into());
-        params.push(store.deleted_at.map(|t| t.format(&Rfc3339).unwrap()).into());
+        params.push(
+            store
+                .record_lifetime
+                .updated_at()
+                .map(|t| t.format(&Rfc3339))
+                .transpose()?
+                .into(),
+        );
+        params.push(
+            store
+                .record_lifetime
+                .deleted_at()
+                .map(|t| t.format(&Rfc3339))
+                .transpose()?
+                .into(),
+        );
 
         self.connection
             .conn(move |conn| {

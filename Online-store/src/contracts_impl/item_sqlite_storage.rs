@@ -7,6 +7,8 @@ use uuid::Uuid;
 use crate::contracts::item_storage::ItemStorage;
 use crate::models::item::Item;
 
+use super::sqlite_validation_error;
+
 pub struct ItemSqliteStorage {
     connection: Client,
 }
@@ -22,22 +24,34 @@ impl ItemStorage for ItemSqliteStorage {
         const QUERY: &str = "INSERT INTO items (id, name, company, model, characteristics, price, guarantee_period, image, created_at, updated_at, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 
         let mut params: Vec<Value> = Vec::with_capacity(11);
-        params.push(item.id.into());
-        params.push(item.name.into());
-        params.push(item.company.into());
-        params.push(item.model.into());
+        params.push(item.id.value().into());
+        params.push(item.name.value().to_string().into());
+        params.push(item.company.value().to_string().into());
+        params.push(item.model.value().to_string().into());
 
         // Конвертация ошибки сериализации JSON
         let chars_json = serde_json::to_string(&item.characteristics)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         params.push(chars_json.into());
 
-        params.push(item.price.into());
-        params.push(item.guarantee_period.into());
+        params.push(item.price.value().into());
+        params.push(i64::from(item.guarantee_period.value()).into());
         params.push(item.image.into());
-        params.push(item.created_at.format(&Rfc3339)?.into());
-        params.push(item.updated_at.map(|t| t.format(&Rfc3339).unwrap()).into());
-        params.push(item.deleted_at.map(|t| t.format(&Rfc3339).unwrap()).into());
+        params.push(item.record_lifetime.created_at().format(&Rfc3339)?.into());
+        params.push(
+            item.record_lifetime
+                .updated_at()
+                .map(|t| t.format(&Rfc3339))
+                .transpose()?
+                .into(),
+        );
+        params.push(
+            item.record_lifetime
+                .deleted_at()
+                .map(|t| t.format(&Rfc3339))
+                .transpose()?
+                .into(),
+        );
 
         self.connection
             .conn(move |conn| {
@@ -113,11 +127,15 @@ impl ItemStorage for ItemSqliteStorage {
                         })
                         .transpose()?;
 
-                    Ok(Item::create(
+                    let name: String = row.get(1)?;
+                    let company: String = row.get(2)?;
+                    let model: String = row.get(3)?;
+
+                    Item::create(
                         id,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
+                        name,
+                        company,
+                        model,
                         characteristics,
                         row.get(5)?,
                         row.get(6)?,
@@ -125,7 +143,8 @@ impl ItemStorage for ItemSqliteStorage {
                         created_at,
                         updated_at,
                         deleted_at,
-                    ))
+                    )
+                    .map_err(sqlite_validation_error)
                 }) {
                     Ok(item) => item,
                     Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
@@ -153,20 +172,32 @@ impl ItemStorage for ItemSqliteStorage {
         const QUERY: &str = "UPDATE items SET name=?2, company=?3, model=?4, characteristics=?5, price=?6, guarantee_period=?7, image=?8, updated_at=?9, deleted_at=?10 WHERE id=?1";
 
         let mut params: Vec<Value> = Vec::with_capacity(10);
-        params.push(item.id.into());
-        params.push(item.name.clone().into());
-        params.push(item.company.clone().into());
-        params.push(item.model.clone().into());
+        params.push(item.id.value().into());
+        params.push(item.name.value().to_string().into());
+        params.push(item.company.value().to_string().into());
+        params.push(item.model.value().to_string().into());
 
         let chars_json = serde_json::to_string(&item.characteristics)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         params.push(chars_json.into());
 
-        params.push(item.price.into());
-        params.push(item.guarantee_period.into());
+        params.push(item.price.value().into());
+        params.push(i64::from(item.guarantee_period.value()).into());
         params.push(item.image.clone().into());
-        params.push(item.updated_at.map(|t| t.format(&Rfc3339).unwrap()).into());
-        params.push(item.deleted_at.map(|t| t.format(&Rfc3339).unwrap()).into());
+        params.push(
+            item.record_lifetime
+                .updated_at()
+                .map(|t| t.format(&Rfc3339))
+                .transpose()?
+                .into(),
+        );
+        params.push(
+            item.record_lifetime
+                .deleted_at()
+                .map(|t| t.format(&Rfc3339))
+                .transpose()?
+                .into(),
+        );
 
         self.connection
             .conn(move |conn| {

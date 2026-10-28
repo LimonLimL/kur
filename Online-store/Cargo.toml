@@ -27,6 +27,9 @@ features = ["array", "backup", "blob", "bundled", "cache", "time", "uuid", "vtab
 [dependencies.async-lock]
 version = "3.4.2"
 
+[dependencies.regex]
+version = "1"
+
 [dependencies.ohkami]
 version = "0.24.9"
 features = ["rt_smol"]
